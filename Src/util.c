@@ -103,6 +103,11 @@ int16_t  speedAvg;                      // average measured speed
 int16_t  speedAvgAbs;                   // average measured speed in absolute
 uint8_t  timeoutFlgADC    = 0;          // Timeout Flag for ADC Protection:    0 = OK, 1 = Problem detected (line disconnected or wrong ADC data)
 uint8_t  timeoutFlgSerial = 0;          // Timeout Flag for Rx Serial command: 0 = OK, 1 = Problem detected (line disconnected or wrong Rx data)
+#if (defined(CONTROL_SERIAL_USART2) || defined(CONTROL_SERIAL_USART3)) && !defined(CONTROL_IBUS)
+uint8_t  motorsAllowed    = 0;          // Motor arming request from SerialCommand.flags bit0: motors stay disarmed (standby) until the host allows
+#else
+uint8_t  motorsAllowed    = 1;          // Input variants without the flags field: always allowed (original behavior)
+#endif
 
 uint8_t  ctrlModReqRaw = CTRL_MOD_REQ;
 uint8_t  ctrlModReq    = CTRL_MOD_REQ;  // Final control mode request 
@@ -837,6 +842,7 @@ void readInputRaw(void) {
       #else
         input1[inIdx].raw = commandL.steer;
         input2[inIdx].raw = commandL.speed;
+        motorsAllowed     = (uint8_t)(commandL.flags & 0x01);
       #endif
     }
     #endif
@@ -851,6 +857,7 @@ void readInputRaw(void) {
       #else
         input1[inIdx].raw = commandR.steer;
         input2[inIdx].raw = commandR.speed;
+        motorsAllowed     = (uint8_t)(commandR.flags & 0x01);
       #endif
     }
     #endif
@@ -1246,7 +1253,7 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
   #else
   uint16_t checksum;
   if (command_in->start == SERIAL_START_FRAME) {
-    checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed);
+    checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed ^ command_in->flags);
     if (command_in->checksum == checksum) {
       *command_out = *command_in;
       if (usart_idx == 2) {             // Sideboard USART2
@@ -1529,23 +1536,12 @@ void poweroffPressCheck(void) {
       uint16_t cnt_press = 0;
       while(HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) {
         HAL_Delay(10);
-        if (cnt_press++ == 5 * 100) { beepShort(5); }
+        cnt_press++;
       }
-      if (cnt_press >= 5 * 100) {                         // Check if press is more than 5 sec
-        HAL_Delay(1000);
-        if (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) {  // Double press: Adjust Max Current, Max Speed
-          while(HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) { HAL_Delay(10); }
-          beepLong(8);
-          updateCurSpdLim();
-          beepShort(5);
-        } else {                                          // Long press: Calibrate ADC Limits
-          #ifdef AUTO_CALIBRATION_ENA
-          beepLong(16); 
-          adcCalibLim();
-          beepShort(5);
-          #endif
-        }
-      } else if (cnt_press > 8) {                         // Short press: power off (80 ms debounce)
+      // Robot build: long-press functions (input auto-calibration, current/speed limit
+      // adjustment) removed - a relay acts as the power button and a stuck relay must
+      // never be able to re-calibrate persistent settings. Any debounced press powers off.
+      if (cnt_press > 8) {                                // Power off (80 ms debounce)
         poweroff();
       }
     }

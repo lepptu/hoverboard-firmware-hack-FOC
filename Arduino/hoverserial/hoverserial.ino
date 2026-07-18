@@ -40,10 +40,13 @@ byte *p;                                // Pointer declaration for the new recei
 byte incomingByte;
 byte incomingBytePrev;
 
+// Robot fork protocol (lepptu): command carries a flags field (bit0 = motors allowed),
+// feedback carries DC link currents, FOC iq currents and a status word in cmdLed.
 typedef struct{
    uint16_t start;
    int16_t  steer;
    int16_t  speed;
+   int16_t  flags;       // bit0: motors allowed. 0 = force disarm (standby), 1 = normal arming
    uint16_t checksum;
 } SerialCommand;
 SerialCommand Command;
@@ -56,9 +59,13 @@ typedef struct{
    int16_t  speedL_meas;
    int16_t  wheelR_cnt;
    int16_t  wheelL_cnt;
+   int16_t  left_dc_curr;
+   int16_t  right_dc_curr;
+   int16_t  iq_l;
+   int16_t  iq_r;
    int16_t  batVoltage;
    int16_t  boardTemp;
-   uint16_t cmdLed;
+   uint16_t cmdLed;      // status word: bits 0-3 errCode L, bits 4-7 errCode R, bit 8 motors enabled, bit 9 serial timeout
    uint16_t checksum;
 } SerialFeedback;
 SerialFeedback Feedback;
@@ -76,13 +83,14 @@ void setup()
 }
 
 // ########################## SEND ##########################
-void Send(int16_t uSteer, int16_t uSpeed)
+void Send(int16_t uSteer, int16_t uSpeed, int16_t uFlags)
 {
   // Create command
   Command.start    = (uint16_t)START_FRAME;
   Command.steer    = (int16_t)uSteer;
   Command.speed    = (int16_t)uSpeed;
-  Command.checksum = (uint16_t)(Command.start ^ Command.steer ^ Command.speed);
+  Command.flags    = (int16_t)uFlags;
+  Command.checksum = (uint16_t)(Command.start ^ Command.steer ^ Command.speed ^ Command.flags);
 
   // Write to Serial
   HoverSerial.write((uint8_t *) &Command, sizeof(Command));
@@ -121,7 +129,8 @@ void Receive()
     if (idx == sizeof(SerialFeedback)) {
         uint16_t checksum;
         checksum = (uint16_t)(NewFeedback.start ^ NewFeedback.cmd1 ^ NewFeedback.cmd2 ^ NewFeedback.speedR_meas ^ NewFeedback.speedL_meas
-                            ^ NewFeedback.wheelR_cnt ^ NewFeedback.wheelL_cnt ^ NewFeedback.batVoltage ^ NewFeedback.boardTemp ^ NewFeedback.cmdLed);
+                            ^ NewFeedback.wheelR_cnt ^ NewFeedback.wheelL_cnt ^ NewFeedback.left_dc_curr ^ NewFeedback.right_dc_curr
+                            ^ NewFeedback.iq_l ^ NewFeedback.iq_r ^ NewFeedback.batVoltage ^ NewFeedback.boardTemp ^ NewFeedback.cmdLed);
 
         // Check validity of the new data
         if (NewFeedback.start == START_FRAME && checksum == NewFeedback.checksum) {
@@ -129,15 +138,19 @@ void Receive()
             memcpy(&Feedback, &NewFeedback, sizeof(SerialFeedback));
 
             // Print data to built-in Serial
-            Serial.print("1: ");   Serial.print(Feedback.cmd1);
-            Serial.print(" 2: ");  Serial.print(Feedback.cmd2);
-            Serial.print(" 3: ");  Serial.print(Feedback.speedR_meas);
-            Serial.print(" 4: ");  Serial.print(Feedback.speedL_meas);
-            Serial.print(" r: ");  Serial.print(Feedback.wheelR_cnt);
-            Serial.print(" l: ");  Serial.print(Feedback.wheelL_cnt);
-            Serial.print(" 5: ");  Serial.print(Feedback.batVoltage);
-            Serial.print(" 6: ");  Serial.print(Feedback.boardTemp);
-            Serial.print(" 7: ");  Serial.println(Feedback.cmdLed);
+            Serial.print("1: ");    Serial.print(Feedback.cmd1);
+            Serial.print(" 2: ");   Serial.print(Feedback.cmd2);
+            Serial.print(" 3: ");   Serial.print(Feedback.speedR_meas);
+            Serial.print(" 4: ");   Serial.print(Feedback.speedL_meas);
+            Serial.print(" r: ");   Serial.print(Feedback.wheelR_cnt);
+            Serial.print(" l: ");   Serial.print(Feedback.wheelL_cnt);
+            Serial.print(" iR: ");  Serial.print(Feedback.right_dc_curr);
+            Serial.print(" iL: ");  Serial.print(Feedback.left_dc_curr);
+            Serial.print(" iqR: "); Serial.print(Feedback.iq_r);
+            Serial.print(" iqL: "); Serial.print(Feedback.iq_l);
+            Serial.print(" 5: ");   Serial.print(Feedback.batVoltage);
+            Serial.print(" 6: ");   Serial.print(Feedback.boardTemp);
+            Serial.print(" 7: ");   Serial.println(Feedback.cmdLed, BIN);
         } else {
           Serial.println("Non-valid data skipped");
         }
@@ -161,10 +174,10 @@ void loop(void)
   // Check for new received data
   Receive();
 
-  // Send commands
+  // Send commands (flags bit0 = 1: motors allowed)
   if (iTimeSend > timeNow) return;
   iTimeSend = timeNow + TIME_SEND;
-  Send(0, SPEED_MAX_TEST - 2*abs(iTest));
+  Send(0, SPEED_MAX_TEST - 2*abs(iTest), 1);
   
   // Calculate test command signal
   iTest += 1;

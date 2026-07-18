@@ -75,8 +75,8 @@
  * Then you can verify voltage on debug output value 6 (to get calibrated voltage multiplied by 100).
 */
 #define BAT_FILT_COEF           655       // battery voltage filter coefficient in fixed-point. coef_fixedPoint = coef_floatingPoint * 2^16. In this case 655 = 0.01 * 2^16
-#define BAT_CALIB_REAL_VOLTAGE  3970      // input voltage measured by multimeter (multiplied by 100). In this case 43.00 V * 100 = 4300
-#define BAT_CALIB_ADC           1492      // adc-value measured by mainboard (value nr 5 on UART debug output)
+#define BAT_CALIB_REAL_VOLTAGE  3970      // input voltage measured by multimeter (multiplied by 100). In this case 39.70 V * 100 = 3970
+#define BAT_CALIB_ADC           1492      // adc-value measured by mainboard (value nr 5 on UART debug output) at the voltage above
 #define BAT_CELLS               10        // battery number of cells. Normal Hoverboard battery: 10s
 #define BAT_LVL2_ENABLE         0         // to beep or not to beep, 1 or 0
 #define BAT_LVL1_ENABLE         1         // to beep or not to beep, 1 or 0
@@ -175,12 +175,14 @@
 
 // ############################## DEFAULT SETTINGS ############################
 // Default settings will be applied at the end of this config file if not set before
-#define INACTIVITY_TIMEOUT        30       // Minutes of not driving until poweroff. it is not very precise.
+// Robot build: INACTIVITY_TIMEOUT removed - the board must stay on for 24/7 telemetry.
+// BAT_DEAD undervoltage poweroff and the power button remain the only poweroff paths.
 #define BEEPS_BACKWARD            0       // 0 or 1
 #define ADC_MARGIN                100     // ADC input margin applied on the raw ADC min and max to make sure the MIN and MAX values are reached even in the presence of noise
 #define ADC_PROTECT_TIMEOUT       100     // ADC Protection: number of wrong / missing input commands before safety state is taken
 #define ADC_PROTECT_THRESH        200     // ADC Protection threshold below/above the MIN/MAX ADC values
-#define AUTO_CALIBRATION_ENA              // Enable/Disable input auto-calibration by holding power button pressed. Un-comment this if auto-calibration is not needed.
+// Robot build: AUTO_CALIBRATION_ENA removed - a relay acts as the power button, and a stuck
+// relay (>=5 s "press") must never be able to re-calibrate the serial input mapping in flash.
 
 /* FILTER is in fixdt(0,16,16): VAL_fixedPoint = VAL_floatingPoint * 2^16. In this case 6553 = 0.1 * 2^16
  * Value of COEFFICIENT is in fixdt(1,16,14)
@@ -333,7 +335,7 @@
     #define AUX_INPUT1           3, -1000, 0, 1000, 0     // TYPE, MIN, MID, MAX, DEADBAND. See INPUT FORMAT section
     #define AUX_INPUT2           3, -1000, 0, 1000, 0     // TYPE, MIN, MID, MAX, DEADBAND. See INPUT FORMAT section
   #else
-    #define FLASH_WRITE_KEY      0x1002  // Flash memory writing key. Change this key to ignore the input calibrations from the flash memory and use the ones in config.h
+    #define FLASH_WRITE_KEY      0x1012  // Flash memory writing key. Bumped from 0x1002 (robot build) so any input calibration or current/speed limits stored in flash by the removed long-press functions are ignored and the config.h values apply.
   #endif
 
   // #define SUPPORT_BUTTONS_LEFT       // use left sensor board cable for button inputs.  Disable DEBUG_SERIAL_USART2!
@@ -768,6 +770,14 @@
 // Functional checks
 #if (defined(CONTROL_PPM_LEFT) || defined(CONTROL_PPM_RIGHT)) && !defined(PPM_NUM_CHANNELS)
   #error Total number of PPM channels needs to be set
+#endif
+
+// Robot build guards: the ROS2 driver (hoverboard_driver) hard-codes these assumptions
+#if defined(VARIANT_USART) && (N_MOT_MAX != 1000)
+  #error The ROS2 driver assumes N_MOT_MAX == 1000 (serial input 1 unit = 1 RPM in SPD_MODE). Update the driver scaling before changing this.
+#endif
+#if defined(VARIANT_USART) && ((SPEED_COEFFICIENT != 16384) || (STEER_COEFFICIENT != 8192))
+  #error The ROS2 driver assumes SPEED_COEFFICIENT = 1.0 (16384) and STEER_COEFFICIENT = 0.5 (8192) to reconstruct per-wheel commands. Update the driver mixer before changing these.
 #endif
 // ############################# END OF VALIDATE SETTINGS ############################
 

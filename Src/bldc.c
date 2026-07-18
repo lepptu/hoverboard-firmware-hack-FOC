@@ -92,9 +92,8 @@ int16_t modulo(int16_t m, int16_t rest_classes){
 }
 
 int16_t up_or_down(int16_t vorher, int16_t nachher){
-  uint16_t up_down[6] = {0,-1,-2,0,2,1};
-  //uint16_t mod_diff =  (((vorher - nachher) % 6) + 6) % 6;
-  
+  static const int16_t up_down[6] = {0,-1,-2,0,2,1};
+
   return up_down[modulo(vorher-nachher, 6)];
 }
 

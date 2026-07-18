@@ -8,6 +8,20 @@ This repository implements Field Oriented Control (FOC) for stock hoverboards. C
  - smooth torque output and improved motor efficiency. Thus, lower energy consumption
  - field weakening to increase maximum speed range
 
+---
+
+## ⚠ Robot fork notice (lepptu)
+
+This fork drives a lawn-mower robot from a ROS2 driver over **USART3** (`VARIANT_USART`, FOC + SPD_MODE). The serial protocol and several behaviors differ from upstream — plans and rationale live in the `mowbot_plans` repo, folder *hoverboard firmware plan*.
+
+**Command frame — 10 bytes:** `{uint16 start, int16 steer, int16 speed, int16 flags, uint16 checksum}`, checksum = XOR of all preceding fields. `flags` bit 0 = *motors allowed*: 0 forces disarm (standby — wheels freewheel, telemetry keeps streaming), 1 allows normal arming (inputs must be near zero to arm). Motors also disarm automatically on serial command timeout (~0.8 s) and re-arm when valid frames with bit 0 set resume.
+
+**Feedback frame — 30 bytes:** `{uint16 start, int16 cmd1, cmd2, speedR_meas, speedL_meas, wheelR_cnt, wheelL_cnt, left_dc_curr, right_dc_curr, iq_l, iq_r, batVoltage, boardTemp, uint16 cmdLed, uint16 checksum}`. `left/right_dc_curr` = DC link current × 100 [A]; `iq_l/iq_r` = raw FOC q-axis (torque) current. `cmdLed` is repurposed as a **status word**: bits 0-3 left motor error code, bits 4-7 right motor error code, bit 8 motors enabled, bit 9 serial timeout.
+
+**Behavior changes:** inactivity auto-poweroff removed (board stays on for 24/7 battery telemetry; `BAT_DEAD` undervoltage poweroff and the power button remain); power-button long-press functions (input auto-calibration, current/speed limit adjust) removed — any debounced press powers off; `FLASH_WRITE_KEY` bumped so previously flash-stored calibrations are ignored; upstream `8df24d4` cherry-picked (UART/DMA interrupt priorities below the motor-control ISR); `config.h` guards `#error` if `N_MOT_MAX != 1000` or the mixer coefficients change, since the ROS2 driver hard-codes those assumptions.
+
+---
+
 
 Table of Contents
 =======================

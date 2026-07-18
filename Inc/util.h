@@ -39,6 +39,7 @@
       uint16_t  start;
       int16_t   steer;
       int16_t   speed;
+      int16_t   flags;      // bit0: motors allowed. 0 = force disarm (standby, wheels freewheel), 1 = normal arming
       uint16_t  checksum;
     } SerialCommand;
   #endif

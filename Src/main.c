@@ -76,6 +76,7 @@ extern volatile uint32_t timeoutCntGen; // Timeout counter for the General timeo
 extern volatile uint8_t  timeoutFlgGen; // Timeout Flag for the General timeout (PPM, PWM, Nunchuk)
 extern uint8_t timeoutFlgADC;           // Timeout Flag for for ADC Protection: 0 = OK, 1 = Problem detected (line disconnected or wrong ADC data)
 extern uint8_t timeoutFlgSerial;        // Timeout Flag for Rx Serial command: 0 = OK, 1 = Problem detected (line disconnected or wrong Rx data)
+extern uint8_t motorsAllowed;           // Motor arming request from the serial host (SerialCommand.flags bit0)
 
 extern volatile int pwml;               // global variable for pwm left. -1000 to 1000
 extern volatile int pwmr;               // global variable for pwm right. -1000 to 1000
@@ -130,6 +131,8 @@ typedef struct{
   int16_t   wheelL_cnt;
   int16_t   left_dc_curr;
   int16_t   right_dc_curr;
+  int16_t   iq_l;
+  int16_t   iq_r;
   int16_t   batVoltage;
   int16_t   boardTemp;
   uint16_t  cmdLed;
@@ -137,10 +140,10 @@ typedef struct{
 } SerialFeedback;
 static SerialFeedback Feedback;
 #endif
-#if defined(FEEDBACK_SERIAL_USART2)
+#if defined(FEEDBACK_SERIAL_USART2) && defined(SIDEBOARD_SERIAL_USART2)
 static uint8_t sideboard_leds_L;
 #endif
-#if defined(FEEDBACK_SERIAL_USART3)
+#if defined(FEEDBACK_SERIAL_USART3) && defined(SIDEBOARD_SERIAL_USART3)
 static uint8_t sideboard_leds_R;
 #endif
 
@@ -166,7 +169,6 @@ static int16_t    speed;                // local variable for speed. -1000 to 10
 #endif
 
 static uint32_t    buzzerTimer_prev = 0;
-static uint32_t    inactivity_timeout_counter;
 static MultipleTap MultipleTapBrake;    // define multiple tap functionality for the Brake pedal
 
 int main(void) {
@@ -222,8 +224,13 @@ int main(void) {
     calcAvgSpeed();                       // Calculate average measured speed: speedAvg, speedAvgAbs
 
     #ifndef VARIANT_TRANSPOTTER
-      // ####### MOTOR ENABLING: Only if the initial input is very small (for SAFETY) #######
-      if (enable == 0 && (!rtY_Left.z_errCode && !rtY_Right.z_errCode) && (input1[inIdx].cmd > -50 && input1[inIdx].cmd < 50) && (input2[inIdx].cmd > -50 && input2[inIdx].cmd < 50)){
+      // ####### MOTOR DISARM: standby requested by host (flags bit0 = 0) or serial link lost #######
+      if (enable && (!motorsAllowed || timeoutFlgSerial)) {
+        enable = 0;                       // MOE is cleared in bldc.c -> wheels freewheel, feedback keeps streaming
+      }
+
+      // ####### MOTOR ENABLING: Only if allowed by host and the initial input is very small (for SAFETY) #######
+      if (enable == 0 && motorsAllowed && !timeoutFlgSerial && (!rtY_Left.z_errCode && !rtY_Right.z_errCode) && (input1[inIdx].cmd > -50 && input1[inIdx].cmd < 50) && (input2[inIdx].cmd > -50 && input2[inIdx].cmd < 50)){
         beepShort(6);                     // make 2 beeps indicating the motor enable
         beepShort(4); HAL_Delay(100);
         steerFixdt = speedFixdt = 0;      // reset filters
@@ -469,23 +476,40 @@ int main(void) {
         Feedback.wheelL_cnt     = (int16_t)odom_l;
         Feedback.left_dc_curr   = (int16_t)left_dc_curr;
         Feedback.right_dc_curr  = (int16_t)right_dc_curr;
+        Feedback.iq_l           = (int16_t)rtY_Left.iq;
+        Feedback.iq_r           = (int16_t)rtY_Right.iq;
         Feedback.batVoltage	    = (int16_t)batVoltageCalib;
         Feedback.boardTemp	    = (int16_t)board_temp_deg_c;
+        #if !defined(SIDEBOARD_SERIAL_USART2) && !defined(SIDEBOARD_SERIAL_USART3)
+          // No sideboard: cmdLed is repurposed as a status word.
+          // bits 0-3: left motor error code, bits 4-7: right motor error code,
+          // bit 8: motors enabled, bit 9: serial command timeout
+          Feedback.cmdLed       = (uint16_t)((rtY_Left.z_errCode & 0x0F)
+                                          | ((rtY_Right.z_errCode & 0x0F) << 4)
+                                          | ((enable & 0x01) << 8)
+                                          | ((timeoutFlgSerial & 0x01) << 9));
+        #endif
 
         #if defined(FEEDBACK_SERIAL_USART2)
           if(__HAL_DMA_GET_COUNTER(huart2.hdmatx) == 0) {
+            #if defined(SIDEBOARD_SERIAL_USART2)
             Feedback.cmdLed     = (uint16_t)sideboard_leds_L;
-            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                            ^ Feedback.wheelR_cnt ^ Feedback.wheelL_cnt ^ Feedback.left_dc_curr ^ Feedback.right_dc_curr ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
+            #endif
+            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas
+                                            ^ Feedback.wheelR_cnt ^ Feedback.wheelL_cnt ^ Feedback.left_dc_curr ^ Feedback.right_dc_curr
+                                            ^ Feedback.iq_l ^ Feedback.iq_r ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
 
             HAL_UART_Transmit_DMA(&huart2, (uint8_t *)&Feedback, sizeof(Feedback));
           }
         #endif
         #if defined(FEEDBACK_SERIAL_USART3)
           if(__HAL_DMA_GET_COUNTER(huart3.hdmatx) == 0) {
+            #if defined(SIDEBOARD_SERIAL_USART3)
             Feedback.cmdLed     = (uint16_t)sideboard_leds_R;
-            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                            ^ Feedback.wheelR_cnt ^ Feedback.wheelL_cnt ^ Feedback.left_dc_curr ^ Feedback.right_dc_curr ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
+            #endif
+            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas
+                                            ^ Feedback.wheelR_cnt ^ Feedback.wheelL_cnt ^ Feedback.left_dc_curr ^ Feedback.right_dc_curr
+                                            ^ Feedback.iq_l ^ Feedback.iq_r ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
 
             HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&Feedback, sizeof(Feedback));
           }
@@ -523,16 +547,8 @@ int main(void) {
     }
 
 
-    // ####### INACTIVITY TIMEOUT #######
-    if (abs(cmdL) > 50 || abs(cmdR) > 50) {
-      inactivity_timeout_counter = 0;
-    } else {
-      inactivity_timeout_counter++;
-    }
-    if (inactivity_timeout_counter > (INACTIVITY_TIMEOUT * 60 * 1000) / (DELAY_IN_MAIN_LOOP + 1)) {  // rest of main loop needs maybe 1ms
-      poweroff();
-    }
-
+    // Robot build: inactivity auto-poweroff removed - the board must stay on for 24/7
+    // battery/telemetry streaming. BAT_DEAD undervoltage poweroff and the power button remain.
 
     // HAL_GPIO_TogglePin(LED_PORT, LED_PIN);                 // This is to measure the main() loop duration with an oscilloscope connected to LED_PIN
     // Update states
